@@ -1,7 +1,6 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const bcrypt = require("bcrypt"); // Add bcrypt
 const port = process.env.PORT || 5000;
 const app = express();
 const Stripe = require("stripe");
@@ -31,92 +30,59 @@ async function run() {
     const reviewCollection = database.collection("Reviews");
     const applicationCollection = database.collection("Application");
 
-    // Verify admin
+    // verify admin
     const verifyAdmin = async (req, res, next) => {
       const user = await userCollection.findOne({ userEmail: req.query.email });
       const isAdmin = user?.role === "admin";
       if (!isAdmin) {
-        return res.status(403).send({ message: "Forbidden access" });
+        return res.status(403).send({ message: "forbidden access" });
       }
       next();
     };
 
-    // Verify authorization
+    // verify authorization
     const verifyAuthorization = async (req, res, next) => {
       const user = await userCollection.findOne({ userEmail: req.query.email });
       const isAuthorized = user?.role === "admin" || user?.role === "moderator";
       if (!isAuthorized) {
-        return res.status(403).send({ message: "Forbidden access" });
+        return res.status(403).send({ message: "forbidden access" });
       }
       next();
     };
 
-    //////// User related ////////
+    //////// user related ////////
 
     app.post("/create-user", async (req, res) => {
-      const { email, password, displayName } = req.body;
-      const query = { userEmail: email };
-      let user = await userCollection.findOne(query);
-
-      let role = "user";
-      if (password) {
-        if (
-          email === process.env.ADMIN_EMAIL &&
-          password === process.env.ADMIN_PASSWORD
-        )
-          role = "admin";
-        else if (
-          email === process.env.MODERATOR_EMAIL &&
-          password === process.env.MODERATOR_PASSWORD
-        )
-          role = "moderator";
+      const data = req.body;
+      const query = { userEmail: data.email };
+      const existingUser = await userCollection.findOne(query);
+      if (existingUser) {
+        return res.send({ message: "user already exists", insertedId: null });
       }
-
-      const hashedPassword = password ? bcrypt.hashSync(password, 10) : null;
-      if (user) {
-        await userCollection.updateOne(query, {
-          $set: {
-            role,
-            password: hashedPassword,
-            userName: displayName || user.userName,
-          },
-        });
-        res.send({ message: "User role updated", insertedId: user._id });
-      } else {
-        const result = await userCollection.insertOne({
-          userName: displayName || email,
-          userEmail: email,
-          role,
-          password: hashedPassword,
-        });
-        res.send({ message: "User created", insertedId: result.insertedId });
-      }
+      const result = await userCollection.insertOne({
+        userName: data.displayName,
+        userEmail: data.email,
+        role: "user",
+      });
+      res.send(result);
     });
+
     app.get("/users/:email", async (req, res) => {
-      const result = await userCollection.findOne(
-        { userEmail: req.params.email },
-        { projection: { userName: 1, userEmail: 1, role: 1, _id: 1 } } // Exclude password
-      );
-      if (!result) {
-        return res.status(404).send({ message: "User not found" });
-      }
+      const result = await userCollection.findOne({
+        userEmail: req.params.email,
+      });
       res.send(result);
     });
 
     app.get("/all-users", verifyAdmin, async (req, res) => {
-      const result = await userCollection
-        .find(
-          {},
-          { projection: { userName: 1, userEmail: 1, role: 1, _id: 1 } }
-        ) // Exclude password
-        .toArray();
+      const result = await userCollection.find().toArray();
       res.send(result);
     });
 
     app.delete("/delete-user/:id", verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const result = await userCollection.deleteOne({
-        _id: new ObjectId(id),
+        _id: new ObjectId(req.params.id),
       });
       res.send(result);
     });
@@ -131,8 +97,9 @@ async function run() {
       res.send(result);
     });
 
-    //////// Data related ////////
+    //////// data related ////////
 
+    // get data for home page based on lowest application fee and recently added
     app.get("/", async (req, res) => {
       const result = await scholarshipsCollection
         .find()
@@ -143,6 +110,7 @@ async function run() {
       res.send(result);
     });
 
+    // get all data
     app.get("/all-data", async (req, res) => {
       const result = await scholarshipsCollection.find().toArray();
       res.send(result);
@@ -202,19 +170,14 @@ async function run() {
 
     app.get("/all-collections-data", async (req, res) => {
       const scholarships = await scholarshipsCollection.find().toArray();
-      const users = await userCollection
-        .find(
-          {},
-          { projection: { userName: 1, userEmail: 1, role: 1, _id: 1 } }
-        )
-        .toArray();
+      const users = await userCollection.find().toArray();
       const reviews = await reviewCollection.find().toArray();
       const application = await applicationCollection.find().toArray();
       const result = [scholarships, users, reviews, application];
       res.send(result);
     });
 
-    //////// Review related ////////
+    //////// review related ////////
 
     app.post("/add-review/:id", async (req, res) => {
       const id = req.params.id;
@@ -262,7 +225,7 @@ async function run() {
       res.send(result);
     });
 
-    //////// Application related ////////
+    //////// application related ////////
 
     app.get("/all-application", verifyAuthorization, async (req, res) => {
       const result = await applicationCollection.find().toArray();
@@ -299,6 +262,11 @@ async function run() {
       res.send(result);
     });
 
+    // app.patch('reject-application/:id', verifyAuthorization, async (req, res) => {
+    //     const result = await applicationCollection.updateOne({ _id: new ObjectId(req.params.id) }, { $set: req.body })
+    //     res.send(result)
+    // })
+
     app.patch("/update-feedback/:id", verifyAuthorization, async (req, res) => {
       const result = await applicationCollection.updateOne(
         { _id: new ObjectId(req.params.id) },
@@ -307,7 +275,7 @@ async function run() {
       res.send(result);
     });
 
-    // Payment gateway
+    // payment gateway
     app.post("/create-payment-intent", async (req, res) => {
       const { price } = req.body;
       const amount = parseInt(price * 100);
@@ -326,7 +294,10 @@ async function run() {
         res.status(400).send({ error: error.message });
       }
     });
+    // payment gateway
 
+    // Send a ping to confirm a successful connection
+    // await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
